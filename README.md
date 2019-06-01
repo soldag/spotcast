@@ -58,13 +58,15 @@ spotcast:
 {
 	"device_name" : "Kök",
 	"uri" : "spotify:playlist:37i9dQZF1DX3yvAYDslnv8",
-	"random_song": true
+	"shuffle": true,
+	"repeat": "context"
 }
 ```
 where
  - `device_name` is the friendly name of the Chromecast
  - `uri` is the spotify uri, supports all uris including track (limit to one track)
- - `random_song` optional parameter that starts the playback at a random position in the playlist
+ - `shuffle` optional parameter that starts the playback at a random position in the playlist and enables shuffle mode
+ - `repeat` optional parameter that enabled repeat of the current context (i.e. playlist) or track
 
 optionally you can specify the `entity_id` of an existing home assistant chromecast mediaplayer like:
 ```

@@ -1,3 +1,4 @@
+import time
 import logging
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
@@ -18,7 +19,13 @@ CONF_SPOTIFY_URI = 'uri'
 CONF_ACCOUNTS = 'accounts'
 CONF_SPOTIFY_ACCOUNT = 'account'
 CONF_TRANSFER_PLAYBACK = 'transfer_playback'
-CONF_RANDOM = 'random_song'
+CONF_SHUFFLE = 'shuffle'
+CONF_REPEAT = 'repeat'
+
+REPEAT_TRACK = 'track'
+REPEAT_CONTEXT = 'context'
+REPEAT_OFF = 'off'
+
 
 SERVICE_START_COMMAND_SCHEMA = vol.Schema({
     vol.Optional(CONF_DEVICE_NAME): cv.string,
@@ -26,7 +33,8 @@ SERVICE_START_COMMAND_SCHEMA = vol.Schema({
     vol.Optional(CONF_SPOTIFY_URI): cv.string,
     vol.Optional(CONF_SPOTIFY_ACCOUNT): cv.string,
     vol.Optional(CONF_TRANSFER_PLAYBACK): cv.boolean,
-    vol.Optional(CONF_RANDOM): cv.boolean
+    vol.Optional(CONF_SHUFFLE): cv.boolean,
+    vol.Optional(CONF_REPEAT): vol.In([REPEAT_TRACK, REPEAT_CONTEXT, REPEAT_OFF]),
 })
 
 ACCOUNTS_SCHEMA = vol.Schema({
@@ -97,7 +105,7 @@ def setup(hass, config):
         expires = data[1] - int(time.time())
         return access_token, expires
 
-    def play(client, spotify_device_id, uri, random_song):
+    def play(client, spotify_device_id, uri, shuffle, repeat):
         # import spotipy
         # import http.client as http_client
         # spotipy.trace = True
@@ -115,14 +123,27 @@ def setup(hass, config):
                 no_playlists = len(playlists['items'])
                 uri = playlists['items'][random.randint(0, no_playlists - 1)]['uri']
             kwargs = {'device_id': spotify_device_id, 'context_uri': uri}
-            if random_song:
+            if shuffle:
                 results = client.user_playlist_tracks("me", uri)
                 position = random.randint(0, results['total'] - 1)
                 _LOGGER.debug('Start playback at random position: %s', position)
                 kwargs['offset'] = {'position': position}
 
-            _LOGGER.debug('Playing context uri using context_uri for uri: "%s" (random_song: %s)', uri, random_song)
+            _LOGGER.debug('Playing context uri using context_uri for uri: "%s" (shuffle: %s)', uri, shuffle)
             client.start_playback(**kwargs)
+
+        # Wait before playback has started before setting repeat and shuffle
+        start = time.monotonic()
+        while client.current_playback() is None:
+            if time.monotonic() - start > 5:
+                _LOGGER.error('Could not start spotify playback.')
+                return
+            time.sleep(0.1)
+
+        if shuffle:
+            client.shuffle(shuffle)
+        if repeat:
+            client.repeat(repeat)
 
     def transfer_pb(client, spotify_device_id):
         _LOGGER.debug('Transfering playback')
@@ -136,7 +157,8 @@ def setup(hass, config):
         transfer_playback = False
 
         uri = call.data.get(CONF_SPOTIFY_URI)
-        random_song = call.data.get(CONF_RANDOM, False)
+        shuffle = call.data.get(CONF_SHUFFLE, False)
+        repeat = call.data.get(CONF_REPEAT)
 
         # Get device name from tiehr device_name or entity_id
         device_name = None
@@ -207,7 +229,7 @@ def setup(hass, config):
         if transfer_playback == True:
             transfer_pb(client, spotify_device_id)
         else:
-            play(client, spotify_device_id, uri, random_song)
+            play(client, spotify_device_id, uri, shuffle, repeat)
 
     hass.services.register(DOMAIN, 'start', start_casting,
                            schema=SERVICE_START_COMMAND_SCHEMA)
