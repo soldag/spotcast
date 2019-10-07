@@ -60,13 +60,24 @@ def setup(hass, config):
 
         # Get cast from discovered devices of cast platform
         known_devices = hass.data.get(KNOWN_CHROMECAST_INFO_KEY, [])
-        cast_info = next((x for x in known_devices if x.friendly_name == device_name), None)
-        _LOGGER.debug('cast info: %s', cast_info)
-        if cast_info:
-            return pychromecast._get_chromecast_from_host((
-                cast_info.host, cast_info.port, cast_info.uuid,
-                cast_info.model_name, cast_info.friendly_name
-            ))
+        cast_infos = (x for x in known_devices if x.friendly_name == device_name)
+        for cast_info in cast_infos:
+            _LOGGER.debug('trying to connect to cast: %s', cast_info)
+            cast = pychromecast._get_chromecast_from_host(
+                host=(
+                    cast_info.host, cast_info.port, cast_info.uuid,
+                    cast_info.model_name, cast_info.friendly_name
+                ),
+                tries=3,
+            )
+
+            try:
+                cast.connect()
+            except pychromecast.ChromecastConnectionError:
+                _LOGGER.debug('failed to connect to cast: %s', cast_info)
+                continue
+
+            return cast
         _LOGGER.error('Could not find device %s from hass.data, falling back to pychromecast scan', device_name)
 
         # Discover devices manually
