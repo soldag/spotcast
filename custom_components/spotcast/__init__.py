@@ -3,7 +3,11 @@ import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.const import (CONF_PASSWORD, CONF_USERNAME)
-from homeassistant.components.cast.media_player import KNOWN_CHROMECAST_INFO_KEY
+from homeassistant.helpers.dispatcher import dispatcher_connect
+from homeassistant.components.cast.media_player import (
+    SIGNAL_CAST_DISCOVERED,
+    SIGNAL_CAST_REMOVED,
+)
 import random
 import time
 
@@ -53,23 +57,30 @@ def setup(hass, config):
     password = conf[CONF_PASSWORD]
     accounts = conf.get(CONF_ACCOUNTS)
 
-    # sensor
-    # hass.helpers.discovery.load_platform('sensor', DOMAIN, {}, config)
+    # discovery
+    discovered_casts = {}
+
+    def cast_discovered(cast_info):
+        discovered_casts[cast_info.uuid] = cast_info
+    dispatcher_connect(hass, SIGNAL_CAST_DISCOVERED, cast_discovered)
+
+    def cast_removed(cast_info):
+        discovered_casts.pop(cast_info.uuid, None)
+    dispatcher_connect(hass, SIGNAL_CAST_REMOVED, cast_removed)
 
     # service
     def get_chromecast_device(device_name):
         import pychromecast
 
-        # Get cast from discovered devices of cast platform
-        known_devices = hass.data.get(KNOWN_CHROMECAST_INFO_KEY, [])
-        cast_info = next((x for x in known_devices if x.friendly_name == device_name), None)
+        # Get cast from discovered devices
+        cast_info = next((x for x in discovered_casts.values() if x.friendly_name == device_name), None)
         _LOGGER.debug('cast info: %s', cast_info)
         if cast_info:
-            return pychromecast._get_chromecast_from_host((
-                cast_info.host, cast_info.port, cast_info.uuid,
-                cast_info.model_name, cast_info.friendly_name
-            ))
-        _LOGGER.error('Could not find device %s from hass.data, falling back to pychromecast scan', device_name)
+            return pychromecast.Chromecast(
+                host=cast_info.host,
+                port=cast_info.port,
+            )
+        _LOGGER.error('Device %s has not been discovered by cast platform, falling back to pychromecast scan', device_name)
 
         # Discover devices manually
         chromecasts = pychromecast.get_chromecasts()
