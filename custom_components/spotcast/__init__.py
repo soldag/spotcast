@@ -9,7 +9,11 @@ from homeassistant.components import http, websocket_api
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
-from homeassistant.components.cast.media_player import KNOWN_CHROMECAST_INFO_KEY
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.components.cast.const import (
+    SIGNAL_CAST_DISCOVERED,
+    SIGNAL_CAST_REMOVED,
+)
 
 __VERSION__ = "3.4.0"
 DOMAIN = "spotcast"
@@ -130,6 +134,18 @@ def setup(hass, config):
         if account not in spotifyTokenInstances:
             spotifyTokenInstances[account] = SpotifyToken(dc, key)
         return spotifyTokenInstances[account]
+
+    discovered_casts = {}
+
+    @callback
+    def async_cast_discovered(cast_info):
+        discovered_casts[cast_info.uuid] = cast_info
+    async_dispatcher_connect(hass, SIGNAL_CAST_DISCOVERED, async_cast_discovered)
+
+    @callback
+    def async_cast_removed(cast_info):
+        discovered_casts.pop(cast_info.uuid, None)
+    async_dispatcher_connect(hass, SIGNAL_CAST_REMOVED, async_cast_removed)
 
     @callback
     def websocket_handle_playlists(hass, connection, msg):
@@ -295,8 +311,7 @@ def setup(hass, config):
         if not spotify_device_id:
             # if still no id available, check cast devices and launch the app on chromecast
             spotify_cast_device = SpotifyCastDevice(
-                hass, call.data.get(CONF_DEVICE_NAME), call.data.get(CONF_ENTITY_ID)
-            )
+                hass, discovered_casts, call.data.get(CONF_DEVICE_NAME), call.data.get(CONF_ENTITY_ID))
             spotify_cast_device.startSpotifyController(access_token, expires)
             spotify_device_id = spotify_cast_device.getSpotifyDeviceId(client)
 
@@ -376,9 +391,10 @@ class SpotifyCastDevice:
     castDevice = None
     spotifyController = None
 
-    def __init__(self, hass, call_device_name, call_entity_id):
+    def __init__(self, hass, discovered_casts, call_device_name, call_entity_id):
         """Initialize a spotify cast device."""
         self.hass = hass
+        self.discovered_casts = discovered_casts
 
         # Get device name from either device_name or entity_id
         device_name = None
@@ -405,39 +421,20 @@ class SpotifyCastDevice:
     def getChromecastDevice(self, device_name):
         import pychromecast
 
-        # Get cast from discovered devices of cast platform
-        known_devices = self.hass.data.get(KNOWN_CHROMECAST_INFO_KEY, [])
-
-        _LOGGER.debug("Chromecast devices: %s", known_devices)
-        try:
-            # HA below 0.113
-            cast_info = next((x for x in known_devices if x.friendly_name == device_name), None)
-        except:
-            cast_info = next(
-                (
-                    known_devices[x]
-                    for x in known_devices
-                    if known_devices[x].friendly_name == device_name
-                ),
-                None,
-            )
-
-        _LOGGER.debug("cast info: %s", cast_info)
+        # Get cast from discovered devices
+        cast_info = next((x for x in self.discovered_casts.values() if x.friendly_name == device_name), None)
+        _LOGGER.debug('cast info: %s', cast_info)
 
         if cast_info:
-            return pychromecast._get_chromecast_from_host(
-                (
-                    cast_info.host,
-                    cast_info.port,
-                    cast_info.uuid,
-                    cast_info.model_name,
-                    cast_info.friendly_name,
-                )
+            host = cast_info.host
+            if host.startswith('record'):
+                host = host.rpartition(',')[-1]
+
+            return pychromecast.Chromecast(
+                host=host,
+                port=cast_info.port,
             )
-        _LOGGER.error(
-            "Could not find device %s from hass.data",
-            device_name,
-        )
+        _LOGGER.error('Device %s has not been discovered by cast platform', device_name)
 
         raise HomeAssistantError("Could not find device with name {}".format(device_name))
 
